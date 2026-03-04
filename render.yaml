@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: iptv-flask
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 2 -k gthread -t 120 -b 0.0.0.0:$PORT app1:app
+    autoDeploy: true
+    envVars:
+      - key: IPTV_BASE_URL
+        sync: false
+      - key: IPTV_USER
+        sync: false
+      - key: IPTV_PASS
+        sync: false
+      - key: IPTV_STRICT_HOST
+        value: "0"
