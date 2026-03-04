@@ -11,7 +11,7 @@ from flask import Flask, render_template_string, request, jsonify, Response, str
 app = Flask(__name__)
 import os
 from urllib.parse import quote, urlparse, urljoin
-http://37.49.226.125:8080/get.php?username=OMM-SOLRAK&password=PEROPALO25&type=m3u
+
 # --- YENİ SUNUCU:---
 BASE_URL = os.getenv("IPTV_BASE_URL", "http://37.49.226.125:8080").rstrip("/")
 USER = os.getenv("IPTV_USER", "OMM-SOLRAK")
