@@ -13,9 +13,9 @@ import os
 from urllib.parse import quote, urlparse, urljoin
 
 # --- YENİ SUNUCU:---
-BASE_URL = os.getenv("IPTV_BASE_URL", "http://31.43.191.125:8080").rstrip("/")
-USER = os.getenv("IPTV_USER", "VIP0155170861486462")
-PASS = os.getenv("IPTV_PASS", "3mnpu4cqm6cw")
+BASE_URL = os.getenv("IPTV_BASE_URL", "http://un.handsom.xyz:8080").rstrip("/")
+USER = os.getenv("IPTV_USER", "cihan96809")
+PASS = os.getenv("IPTV_PASS", "3GEnQpFYarkQ")
 
 # TAPINAKÇI'dan aldığımız 'Turbo Session' ayarı
 turbo_session = requests.Session()
