@@ -45,33 +45,12 @@ def _is_allowed_media_url(target):
         p = urlparse(target)
         if p.scheme not in ('http', 'https'):
             return False
-
-        host = (p.hostname or '').strip().lower()
-        if not host:
-            return False
-
-        # Always block obvious local targets.
-        if host in ('localhost', '127.0.0.1', '::1'):
-            return False
-
-        # Optional strict host pinning.
-        base_host = (urlparse(BASE_URL).hostname or '').strip().lower()
+        # By default allow external CDN/media hosts; set IPTV_STRICT_HOST=1 to lock to BASE_URL host.
         strict = os.getenv('IPTV_STRICT_HOST', '0') == '1'
-        if strict and base_host and host != base_host:
-            return False
-
-        # Block private/local IP literals unless it is exactly BASE_URL host.
-        if re.match(r'^\d+\.\d+\.\d+\.\d+$', host):
-            parts = [int(x) for x in host.split('.')]
-            is_private = (
-                parts[0] == 10 or
-                parts[0] == 127 or
-                (parts[0] == 192 and parts[1] == 168) or
-                (parts[0] == 172 and 16 <= parts[1] <= 31)
-            )
-            if is_private and host != base_host:
+        if strict:
+            base_host = urlparse(BASE_URL).hostname
+            if base_host and p.hostname != base_host:
                 return False
-
         return True
     except Exception:
         return False
@@ -355,16 +334,98 @@ LANDING_TEMPLATE = """
 
         @media (max-width:900px){.hero h1{font-size:32px}.card img{height:220px}}
     </style>
-    <script>
-        function playFeatured(id, title, url, mode){
-            // Open minimal player page to avoid overlay UI
-            const m = mode || 'movies';
-            const u = (url && String(url).trim())
-                ? '/player?url=' + encodeURIComponent(url) + '&title=' + encodeURIComponent(title || '') + '&id=' + encodeURIComponent(id || '') + '&mode=' + encodeURIComponent(m)
-                : '/player?id=' + encodeURIComponent(id || '') + '&title=' + encodeURIComponent(title || '') + '&mode=' + encodeURIComponent(m);
-            window.location.href = u;
+        <script>
+        // ----- TV UYUMLULUK EKLENTİLERİ -----
+        let currentModal = null;
+
+        function setFocusToFirstFocusable(modalElement) {
+            if (!modalElement) return;
+            const focusable = modalElement.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+            if (focusable.length) {
+                focusable[0].focus();
+            } else {
+                modalElement.setAttribute('tabindex', '-1');
+                modalElement.focus();
+            }
         }
-        // favorite helpers for landing
+
+        function trapFocus(event) {
+            if (!currentModal) return;
+            const key = event.key;
+            if (key === 'Escape' || key === 'Back' || key === 'GoBack') {
+                event.preventDefault();
+                if (currentModal.id === 'landingInfoModal') closeLandingInfo();
+                else if (currentModal.id === 'searchModal') closeSearchModal();
+            }
+        }
+
+        document.addEventListener('keydown', trapFocus);
+        // ------------------------------------
+
+        // hero carousel: cycle through random 10 featured covers (from hero_items)
+        (function(){
+            const items = {{ hero_items | tojson }};
+            let idx = 0;
+            const hero = document.getElementById('heroCarousel');
+            const title = document.getElementById('heroTitle');
+            const desc = document.getElementById('heroDesc');
+            const play = document.getElementById('heroPlay');
+            function show(i){
+                const it = items[i];
+                if(!it) return;
+                hero.style.backgroundImage = `url('${it.img}')`;
+                title.innerText = (it.title||'KEŞFEDİN').toUpperCase();
+                desc.innerText = (it.desc||'').length>220 ? it.desc.substring(0,220)+'...' : (it.desc||'');
+                play.onclick = function(){ playFeatured(it.id, it.title, it.url, it.mode || 'movies'); };
+            }
+            if(items && items.length){ show(0); setInterval(()=>{ if(!window._heroPaused) { idx = (idx+1)%items.length; show(idx); } }, 4000); }
+        })();
+
+        // Search modal behavior (debounced, min 3 chars)
+        let _searchTimer = null;
+        function openSearchModal(){ 
+            document.getElementById('searchModal').style.display='flex'; 
+            document.getElementById('searchBox').focus();
+            currentModal = document.getElementById('searchModal');
+            setFocusToFirstFocusable(currentModal);
+        }
+        function closeSearchModal(){ 
+            document.getElementById('searchModal').style.display='none'; 
+            document.getElementById('searchResults').innerHTML='';
+            if (currentModal === document.getElementById('searchModal')) currentModal = null;
+        }
+        function doSearch(force){
+            const q = document.getElementById('searchBox').value.trim();
+            if(!force){
+                if(_searchTimer) clearTimeout(_searchTimer);
+                _searchTimer = setTimeout(()=>{ if(q.length>=3) doSearch(true); }, 350);
+                return;
+            }
+            if(q.length<3){ document.getElementById('searchResults').innerHTML='<div style="color:#ddd">Lütfen en az 3 karakter girin.</div>'; return; }
+            fetch('/search?q='+encodeURIComponent(q)).then(r=>r.json()).then(data=>{
+                const out = document.getElementById('searchResults'); out.innerHTML='';
+                if(!data || !data.results || data.results.length===0){ out.innerHTML='<div style="color:#ddd">Sonuç bulunamadı.</div>'; return; }
+                data.results.forEach(it => {
+                    const div = document.createElement('div'); div.className='card';
+                    div.style.cursor='pointer';
+                    div.innerHTML = `<img src="${it.img}" loading="lazy"><div class="t">${it.title}</div>`;
+                    div.onclick = () => { playFeatured(it.id, it.title, it.url, it.type || 'movies'); };
+                    out.appendChild(div);
+                });
+            }).catch(e=>{ document.getElementById('searchResults').innerHTML='<div style="color:#ddd">Arama hatası</div>'; });
+        }
+        document.addEventListener('keydown', e => { if(e.key==='Escape'){ closeSearchModal(); } });
+
+        function playFeatured(id, title, url, mode){
+    // SECURITY: do NOT pass upstream URL (contains USER/PASS) to the browser.
+    const m = mode || 'movies';
+    const u = '/player?id=' + encodeURIComponent(id || '') +
+              '&title=' + encodeURIComponent(title || '') +
+              '&mode=' + encodeURIComponent(m);
+    window.location.href = u;
+}
+// favorite helpers for landing
+
         function toggleFavLocal(id, title, img){
             const favs = JSON.parse(localStorage.getItem('f_favs')||'[]');
             const idx = favs.findIndex(f=>f.id===id);
@@ -379,8 +440,13 @@ LANDING_TEMPLATE = """
             document.getElementById('landingInfoImg').src = img;
             document.getElementById('landingInfoDesc').innerText = desc || 'Açıklama yok.';
             m.style.display = 'flex';
+            currentModal = document.getElementById('landingInfoModal');
+            setFocusToFirstFocusable(currentModal);
         }
-        function closeLandingInfo(){ document.getElementById('landingInfoModal').style.display='none'; }
+        function closeLandingInfo(){ 
+            document.getElementById('landingInfoModal').style.display='none';
+            if (currentModal === document.getElementById('landingInfoModal')) currentModal = null;
+        }
     </script>
 </head>
 <body>
@@ -654,7 +720,36 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <script>
+      <script>
+        // ----- TV UYUMLULUK EKLENTİLERİ -----
+        let currentModal = null;
+
+        function setFocusToFirstFocusable(modalElement) {
+            if (!modalElement) return;
+            const focusable = modalElement.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+            if (focusable.length) {
+                focusable[0].focus();
+            } else {
+                modalElement.setAttribute('tabindex', '-1');
+                modalElement.focus();
+            }
+        }
+
+        function trapFocus(event) {
+            if (!currentModal) return;
+            const key = event.key;
+            if (key === 'Escape' || key === 'Back' || key === 'GoBack') {
+                event.preventDefault();
+                if (currentModal.id === 'infoModal') closeModal();
+                else if (currentModal.id === 'seasonsModal') closeSeasonsModal();
+                else if (currentModal.id === 'episodesModal') closeEpisodesModal();
+                else if (currentModal.id === 'searchModal') closeSearchModal();
+            }
+        }
+
+        document.addEventListener('keydown', trapFocus);
+        // ------------------------------------
+
         let currentId = "";
 
         // İLERLEME VE FAVORİ
@@ -701,9 +796,14 @@ HTML_TEMPLATE = """
             const btn = document.getElementById('modal-watch-btn');
             btn.dataset.id = id; btn.dataset.mode = mode; btn.dataset.url = url; btn.dataset.name = name;
             document.getElementById('infoModal').style.display = 'flex';
+            currentModal = document.getElementById('infoModal');
+            setFocusToFirstFocusable(currentModal);
         }
 
-        function closeModal() { document.getElementById('infoModal').style.display = 'none'; }
+        function closeModal() { 
+            document.getElementById('infoModal').style.display = 'none';
+            if (currentModal === document.getElementById('infoModal')) currentModal = null;
+        }
 
         async function watchFromModal() {
             const btn = document.getElementById('modal-watch-btn');
@@ -714,7 +814,7 @@ HTML_TEMPLATE = """
                 const data = await res.json();
                 openSeasonsModal(data, id, name);
             } else {
-                window.location.href = '/player?url=' + encodeURIComponent(url || '') + '&title=' + encodeURIComponent(name || '') + '&id=' + encodeURIComponent(id || '') + '&mode=' + encodeURIComponent(mode || 'movies');
+                window.location.href = '/player?id=' + encodeURIComponent(id || '') + '&title=' + encodeURIComponent(name || '') + '&mode=' + encodeURIComponent(mode || 'movies');
             }
         }
 
@@ -733,9 +833,14 @@ HTML_TEMPLATE = """
                 });
             }
             document.getElementById('seasonsModal').style.display = 'flex';
+            currentModal = document.getElementById('seasonsModal');
+            setFocusToFirstFocusable(currentModal);
         }
 
-        function closeSeasonsModal() { document.getElementById('seasonsModal').style.display = 'none'; }
+        function closeSeasonsModal() { 
+            document.getElementById('seasonsModal').style.display = 'none';
+            if (currentModal === document.getElementById('seasonsModal')) currentModal = null;
+        }
 
         function openEpisodesModal(season, seriesName, seriesId) {
             const list = document.getElementById('episodesList');
@@ -746,14 +851,19 @@ HTML_TEMPLATE = """
                 b.className = 'ep-btn';
                 b.innerText = 'Bölüm ' + (e.num || '') + ' - ' + (e.title || 'Bölüm');
                 b.onclick = () => {
-                    window.location.href = '/player?url=' + encodeURIComponent(e.url || '') + '&title=' + encodeURIComponent(seriesName + ' - S' + season.season_num + 'E' + (e.num || '')) + '&id=' + encodeURIComponent(e.id || '') + '&series_id=' + encodeURIComponent(seriesId || '') + '&mode=series';
+                    window.location.href = '/player?id=' + encodeURIComponent(e.id || '') + '&series_id=' + encodeURIComponent(seriesId || '') + '&title=' + encodeURIComponent(seriesName + ' - S' + season.season_num + 'E' + (e.num || '')) + '&mode=series';
                 };
                 list.appendChild(b);
             });
             document.getElementById('episodesModal').style.display = 'flex';
+            currentModal = document.getElementById('episodesModal');
+            setFocusToFirstFocusable(currentModal);
         }
 
-        function closeEpisodesModal() { document.getElementById('episodesModal').style.display = 'none'; }
+        function closeEpisodesModal() { 
+            document.getElementById('episodesModal').style.display = 'none';
+            if (currentModal === document.getElementById('episodesModal')) currentModal = null;
+        }
 
         function filter() {
             let val = document.getElementById('searchInput').value.toLowerCase();
@@ -1050,8 +1160,8 @@ PLAYER_TEMPLATE = """
     </div>
 
     <script>
-        const rawUrl = {{ url|tojson }};
         const playUrl = {{ playback_url|tojson if playback_url is defined else url|tojson }};
+        const rawUrl = playUrl;
         const title = {{ title|tojson }};
         const itemId = {{ request.args.get('id','')|tojson }};
 
@@ -1144,37 +1254,40 @@ PLAYER_TEMPLATE = """
         }
 
         function attachMedia(){
-            if(!rawUrl){ showErr('Oynatilacak URL yok'); return; }
+    if(!playUrl){ showErr('Oynatilacak URL yok'); return; }
 
-            const isM3u8 = rawUrl.includes('.m3u8');
-            if(isM3u8 && window.Hls && Hls.isSupported()){
-                hls = new Hls();
-                hls.loadSource(rawUrl);
-                hls.attachMedia(video);
-                hls.on(Hls.Events.MANIFEST_PARSED, ()=>{
-                    restoreProgress();
-                    startPlay();
-                    setStatus('HLS baglandi');
-                });
-                hls.on(Hls.Events.ERROR, (_, data)=>{
-                    if(data && data.fatal){
-                        showErr('HLS hata: ' + (data.details || 'bilinmeyen'));
-                    }
-                });
-            }else{
-                usingProxy = isChrome;
-                video.src = usingProxy ? playUrl : rawUrl;
-                video.load();
-                video.addEventListener('loadedmetadata', ()=>{
-                    restoreProgress();
-                    startPlay();
-                    setStatus(usingProxy ? 'Kaynak hazir (proxy)' : 'Kaynak hazir (direct)');
-                }, {once:true});
+    const isM3u8 = String(playUrl).includes('.m3u8');
+    // Always use proxy playback URL on HTTPS to avoid Mixed Content.
+    usingProxy = true;
+
+    if(isM3u8 && window.Hls && Hls.isSupported()){
+        hls = new Hls();
+        hls.loadSource(playUrl);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, ()=>{
+            restoreProgress();
+            startPlay();
+            setStatus('HLS (proxy) baglandi');
+        });
+        hls.on(Hls.Events.ERROR, (_, data)=>{
+            if(data && data.fatal){
+                showErr('HLS hata: ' + (data.details || 'bilinmeyen'));
             }
-        }
+        });
+    }else{
+        video.src = playUrl;
+        video.load();
+        video.addEventListener('loadedmetadata', ()=>{
+            restoreProgress();
+            startPlay();
+            setStatus('Kaynak hazir (proxy)');
+        }, {once:true});
+    }
+}
 
 
-        function unlockAudioOnce(){
+function unlockAudioOnce
+(){
             var done = false;
             function go(){
                 if(done) return;
@@ -1289,22 +1402,26 @@ PLAYER_TEMPLATE = """
         video.addEventListener('playing', ()=>{ setStatus('Oynuyor'); updatePlayLabel(); hideUiLater(); });
         video.addEventListener('pause', ()=>{ setStatus('Duraklatildi'); updatePlayLabel(); document.body.classList.remove('hide-ui'); });
         video.addEventListener('error', function(){
-            var c = video.error && video.error.code ? video.error.code : '';
-            if((c === 4 || c === 2) && !triedRetry && !((rawUrl || '').toLowerCase().indexOf('.m3u8') !== -1)){
-                triedRetry = true;
-                usingProxy = !usingProxy;
-                setStatus(usingProxy ? 'Direct acilmadi, proxy deneniyor...' : 'Proxy acilmadi, direct deneniyor...');
-                try{
-                    var base = usingProxy ? playUrl : rawUrl;
-                    var withBust = base + (base.indexOf('?') >= 0 ? '&' : '?') + '_r=' + Date.now();
-                    video.src = withBust;
-                    video.load();
-                    startPlay();
-                    return;
-                }catch(e){}
+    var c = video.error && video.error.code ? video.error.code : '';
+    if(!triedRetry){
+        triedRetry = true;
+        setStatus('Tekrar deneniyor...');
+        try{
+            var base = playUrl;
+            var withBust = base + (base.indexOf('?') >= 0 ? '&' : '?') + '_r=' + Date.now();
+            if(hls){
+                try{ hls.destroy(); }catch(e){}
+                hls = null;
             }
-            showErr('Tarayici medya hatasi' + (c ? (': ' + c) : ''));
-        });
+            video.src = withBust;
+            video.load();
+            startPlay();
+            return;
+        }catch(e){}
+    }
+    showErr('Tarayici medya hatasi' + (c ? (': ' + c) : ''));
+});
+
 
         setInterval(()=>{ if(!video.paused) saveProgress(); }, 5000);
 
@@ -1484,7 +1601,7 @@ def transcode_start():
     if not _is_allowed_media_url(target):
         return jsonify({'ok': False, 'error': 'URL engellendi'}), 403
     if not _is_ffmpeg_available():
-        return jsonify({'ok': False, 'error': 'ffmpeg kurulu degil'}), 503
+        return jsonify({'ok': False, 'error': 'ffmpeg kurulu degil'}), 200
 
     job_id, playlist = _start_transcode_job(target)
     # wait briefly for first playlist write
@@ -1514,29 +1631,38 @@ def transcode_file(job_id, fname):
 
 @app.route('/player')
 def player():
-        # Prefer explicit URL param (already encoded by client). Fallback to building from mode+id.
-        url = request.args.get('url','')
-        title = request.args.get('title','')
-        audio_tracks = []
-        if not url:
-                mode = request.args.get('mode','movies')
-                _id = request.args.get('id') or request.args.get('episode')
-                if _id:
-                        if mode == 'live':
-                                url = f"{BASE_URL}/live/{USER}/{PASS}/{_id}.ts"
-                        elif mode == 'series':
-                                url = f"{BASE_URL}/series/{USER}/{PASS}/{_id}.mp4"
-                        else:
-                                url = f"{BASE_URL}/movie/{USER}/{PASS}/{_id}.mp4"
-        if not url:
-                return "Oynatılacak URL eksik", 400
-        mode = request.args.get('mode','movies')
-        _id = request.args.get('id') or request.args.get('episode') or ''
-        series_id = request.args.get('series_id') or ''
-        item_key = series_id if mode == 'series' else _id
-        audio_tracks = []
+    # SECURITY: Never expose upstream URL (contains credentials) to the browser.
+    mode = request.args.get('mode','movies')
+    title = request.args.get('title','')
+    _id = request.args.get('id') or request.args.get('episode') or ''
+    series_id = request.args.get('series_id') or ''
+    url = ''
+
+    # Backward compatibility: if old links pass ?url=..., accept it server-side BUT do not render it to client.
+    old_url = (request.args.get('url') or '').strip()
+    if old_url and _is_allowed_media_url(old_url):
+        url = old_url
+
+    if not url:
+        if not _id:
+            return "Oynatılacak ID eksik", 400
+        # Build upstream URL on server side
+        if mode == 'live':
+            url = f"{BASE_URL}/live/{USER}/{PASS}/{_id}.ts"
+        elif mode == 'series':
+            # episode id is in _id
+            url = f"{BASE_URL}/series/{USER}/{PASS}/{_id}.mp4"
+        else:
+            url = f"{BASE_URL}/movie/{USER}/{PASS}/{_id}.mp4"
+
+    # Always proxy playback URL
+    if '.m3u8' in url:
+        playback_url = '/proxy_m3u8?url=' + quote(url, safe='')
+    else:
         playback_url = '/proxy?url=' + quote(url, safe='') + '&mode=' + quote(mode, safe='') + '&id=' + quote(_id, safe='') + '&series_id=' + quote(series_id, safe='')
-        return render_template_string(PLAYER_TEMPLATE, url=url, playback_url=playback_url, title=title, audio_tracks=audio_tracks, can_transcode=_is_ffmpeg_available())
+
+    # Render template without leaking upstream URL
+    return render_template_string(PLAYER_TEMPLATE, url=playback_url, playback_url=playback_url, title=title, audio_tracks=[], can_transcode=_is_ffmpeg_available())
 
 
 @app.route('/favicon.ico')
