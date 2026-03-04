@@ -11,11 +11,11 @@ from flask import Flask, render_template_string, request, jsonify, Response, str
 app = Flask(__name__)
 import os
 from urllib.parse import quote, urlparse, urljoin
-
+http://37.49.226.125:8080/get.php?username=OMM-SOLRAK&password=PEROPALO25&type=m3u
 # --- YENİ SUNUCU:---
-BASE_URL = os.getenv("IPTV_BASE_URL", "http://un.handsom.xyz:8080").rstrip("/")
-USER = os.getenv("IPTV_USER", "cihan96809")
-PASS = os.getenv("IPTV_PASS", "3GEnQpFYarkQ")
+BASE_URL = os.getenv("IPTV_BASE_URL", "http://37.49.226.125:8080").rstrip("/")
+USER = os.getenv("IPTV_USER", "OMM-SOLRAK")
+PASS = os.getenv("IPTV_PASS", "PEROPALO25")
 
 # TAPINAKÇI'dan aldığımız 'Turbo Session' ayarı
 turbo_session = requests.Session()
