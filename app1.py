@@ -45,12 +45,33 @@ def _is_allowed_media_url(target):
         p = urlparse(target)
         if p.scheme not in ('http', 'https'):
             return False
-        # By default allow external CDN/media hosts; set IPTV_STRICT_HOST=1 to lock to BASE_URL host.
+
+        host = (p.hostname or '').strip().lower()
+        if not host:
+            return False
+
+        # Always block obvious local targets.
+        if host in ('localhost', '127.0.0.1', '::1'):
+            return False
+
+        # Optional strict host pinning.
+        base_host = (urlparse(BASE_URL).hostname or '').strip().lower()
         strict = os.getenv('IPTV_STRICT_HOST', '0') == '1'
-        if strict:
-            base_host = urlparse(BASE_URL).hostname
-            if base_host and p.hostname != base_host:
+        if strict and base_host and host != base_host:
+            return False
+
+        # Block private/local IP literals unless it is exactly BASE_URL host.
+        if re.match(r'^\d+\.\d+\.\d+\.\d+$', host):
+            parts = [int(x) for x in host.split('.')]
+            is_private = (
+                parts[0] == 10 or
+                parts[0] == 127 or
+                (parts[0] == 192 and parts[1] == 168) or
+                (parts[0] == 172 and 16 <= parts[1] <= 31)
+            )
+            if is_private and host != base_host:
                 return False
+
         return True
     except Exception:
         return False
@@ -334,88 +355,7 @@ LANDING_TEMPLATE = """
 
         @media (max-width:900px){.hero h1{font-size:32px}.card img{height:220px}}
     </style>
-        <script>
-        // ----- TV UYUMLULUK EKLENTİLERİ -----
-        let currentModal = null;
-
-        function setFocusToFirstFocusable(modalElement) {
-            if (!modalElement) return;
-            const focusable = modalElement.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
-            if (focusable.length) {
-                focusable[0].focus();
-            } else {
-                modalElement.setAttribute('tabindex', '-1');
-                modalElement.focus();
-            }
-        }
-
-        function trapFocus(event) {
-            if (!currentModal) return;
-            const key = event.key;
-            if (key === 'Escape' || key === 'Back' || key === 'GoBack') {
-                event.preventDefault();
-                if (currentModal.id === 'landingInfoModal') closeLandingInfo();
-                else if (currentModal.id === 'searchModal') closeSearchModal();
-            }
-        }
-
-        document.addEventListener('keydown', trapFocus);
-        // ------------------------------------
-
-        // hero carousel: cycle through random 10 featured covers (from hero_items)
-        (function(){
-            const items = {{ hero_items | tojson }};
-            let idx = 0;
-            const hero = document.getElementById('heroCarousel');
-            const title = document.getElementById('heroTitle');
-            const desc = document.getElementById('heroDesc');
-            const play = document.getElementById('heroPlay');
-            function show(i){
-                const it = items[i];
-                if(!it) return;
-                hero.style.backgroundImage = `url('${it.img}')`;
-                title.innerText = (it.title||'KEŞFEDİN').toUpperCase();
-                desc.innerText = (it.desc||'').length>220 ? it.desc.substring(0,220)+'...' : (it.desc||'');
-                play.onclick = function(){ playFeatured(it.id, it.title, it.url, it.mode || 'movies'); };
-            }
-            if(items && items.length){ show(0); setInterval(()=>{ if(!window._heroPaused) { idx = (idx+1)%items.length; show(idx); } }, 4000); }
-        })();
-
-        // Search modal behavior (debounced, min 3 chars)
-        let _searchTimer = null;
-        function openSearchModal(){ 
-            document.getElementById('searchModal').style.display='flex'; 
-            document.getElementById('searchBox').focus();
-            currentModal = document.getElementById('searchModal');
-            setFocusToFirstFocusable(currentModal);
-        }
-        function closeSearchModal(){ 
-            document.getElementById('searchModal').style.display='none'; 
-            document.getElementById('searchResults').innerHTML='';
-            if (currentModal === document.getElementById('searchModal')) currentModal = null;
-        }
-        function doSearch(force){
-            const q = document.getElementById('searchBox').value.trim();
-            if(!force){
-                if(_searchTimer) clearTimeout(_searchTimer);
-                _searchTimer = setTimeout(()=>{ if(q.length>=3) doSearch(true); }, 350);
-                return;
-            }
-            if(q.length<3){ document.getElementById('searchResults').innerHTML='<div style="color:#ddd">Lütfen en az 3 karakter girin.</div>'; return; }
-            fetch('/search?q='+encodeURIComponent(q)).then(r=>r.json()).then(data=>{
-                const out = document.getElementById('searchResults'); out.innerHTML='';
-                if(!data || !data.results || data.results.length===0){ out.innerHTML='<div style="color:#ddd">Sonuç bulunamadı.</div>'; return; }
-                data.results.forEach(it => {
-                    const div = document.createElement('div'); div.className='card';
-                    div.style.cursor='pointer';
-                    div.innerHTML = `<img src="${it.img}" loading="lazy"><div class="t">${it.title}</div>`;
-                    div.onclick = () => { playFeatured(it.id, it.title, it.url, it.type || 'movies'); };
-                    out.appendChild(div);
-                });
-            }).catch(e=>{ document.getElementById('searchResults').innerHTML='<div style="color:#ddd">Arama hatası</div>'; });
-        }
-        document.addEventListener('keydown', e => { if(e.key==='Escape'){ closeSearchModal(); } });
-
+    <script>
         function playFeatured(id, title, url, mode){
             // Open minimal player page to avoid overlay UI
             const m = mode || 'movies';
@@ -439,13 +379,8 @@ LANDING_TEMPLATE = """
             document.getElementById('landingInfoImg').src = img;
             document.getElementById('landingInfoDesc').innerText = desc || 'Açıklama yok.';
             m.style.display = 'flex';
-            currentModal = document.getElementById('landingInfoModal');
-            setFocusToFirstFocusable(currentModal);
         }
-        function closeLandingInfo(){ 
-            document.getElementById('landingInfoModal').style.display='none';
-            if (currentModal === document.getElementById('landingInfoModal')) currentModal = null;
-        }
+        function closeLandingInfo(){ document.getElementById('landingInfoModal').style.display='none'; }
     </script>
 </head>
 <body>
@@ -489,8 +424,8 @@ LANDING_TEMPLATE = """
         </div>
     </div>
         <!-- Search Modal -->
-        <div id="searchModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:13001; text-align:center;">
-            <div style="width:85%;max-width:720px;margin:10vh auto 0 auto;background:#0b0b0b;padding:16px;border-radius:8px;color:#fff;text-align:left">
+        <div id="searchModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);align-items:center;justify-content:center;z-index:13001">
+            <div style="width:95%;max-width:900px;background:#0b0b0b;padding:18px;border-radius:8px;color:#fff">
                 <div style="display:flex;gap:12px;align-items:center">
                     <input id="searchBox" placeholder="En az 3 karakter girin..." style="flex:1;padding:12px;border-radius:6px;border:1px solid #222;background:#111;color:#fff;font-size:16px">
                     <button class="ep-btn" onclick="doSearch(true)">ARA</button>
@@ -573,67 +508,6 @@ LANDING_TEMPLATE = """
             {% endfor %}
         </div>
     </div>
-
-
-<script>
-(function(){
-  function getCurrentModal(){
-    try { return (typeof currentModal !== "undefined") ? currentModal : null; } catch(e){ return null; }
-  }
-
-  function focusables(modal){
-    if(!modal) return [];
-    return Array.prototype.slice.call(
-      modal.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])')
-    ).filter(function(el){
-      if(!el) return false;
-      if(el.disabled) return false;
-      var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
-      if(style && (style.display === "none" || style.visibility === "hidden")) return false;
-      return true;
-    });
-  }
-
-  function keepFocusInside(modal){
-    var f = focusables(modal);
-    if(f.length){ f[0].focus(); }
-    else { modal.setAttribute("tabindex","-1"); modal.focus(); }
-  }
-
-  // Pull focus back if it escapes the modal (prevents jumping to posters under the modal).
-  document.addEventListener("focusin", function(e){
-    var m = getCurrentModal();
-    if(!m) return;
-    if(!m.contains(e.target)){
-      e.stopPropagation();
-      keepFocusInside(m);
-    }
-  }, true);
-
-  // Let the TV browser handle navigation INSIDE the modal freely.
-  // Only stop arrows from bubbling to page/grid handlers while a modal is open.
-  document.addEventListener("keydown", function(e){
-    var m = getCurrentModal();
-    if(!m) return;
-
-    var k = e.key;
-    if(k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight"){
-      // If focus is outside modal, block and pull back.
-      if(!m.contains(document.activeElement)){
-        e.preventDefault();
-        e.stopPropagation();
-        keepFocusInside(m);
-        return;
-      }
-      // Focus is inside modal: DO NOT preventDefault (allow free movement),
-      // but stopPropagation so the underlying page doesn't react.
-      if(m.contains(e.target)){
-        e.stopPropagation();
-      }
-    }
-  }, true);
-})();
-</script>
 
 </body>
 </html>
@@ -746,8 +620,8 @@ HTML_TEMPLATE = """
     </div>
 
     <!-- Bilgi Özeti Modal -->
-    <div id="infoModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:10002; text-align:center;">
-        <div style="width:80%; max-width:720px; margin:12vh auto 0 auto; background:#0b0b0b; border:1px solid #222; border-radius:8px; overflow:hidden; display:flex; gap:16px; padding:16px; text-align:left;">
+    <div id="infoModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); align-items:center; justify-content:center; z-index:10002;">
+        <div style="width:90%; max-width:900px; background:#0b0b0b; border:1px solid #222; border-radius:8px; overflow:hidden; display:flex; gap:20px; padding:20px;">
             <img id="modal-img" src="data:image/svg+xml;utf8,<svg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%20400%20600%27><rect%20width=%27100%25%27%20height=%27100%25%27%20fill=%27%23111%27/><text%20x=%2750%25%27%20y=%2750%25%27%20fill=%27%23fff%27%20font-family=%27Segoe%20UI,%20Arial%27%20font-size=%2724%27%20dominant-baseline=%27middle%27%20text-anchor=%27middle%27>Resim%20Yok</text></svg>" style="width:260px; height:auto; object-fit:cover; border-radius:6px;">
             <div style="flex:1; display:flex; flex-direction:column;">
                 <h2 id="modal-title" style="color:#e50914; margin-bottom:8px; text-transform:uppercase; font-size:22px; letter-spacing:0.6px;"></h2>
@@ -763,8 +637,8 @@ HTML_TEMPLATE = """
     </div>
 
     <!-- Sezon Seçim Modal (Diziler için) -->
-    <div id="seasonsModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:10003; text-align:center;">
-        <div style="width:75%; max-width:640px; margin:12vh auto 0 auto; background:#0b0b0b; border:1px solid #222; border-radius:8px; overflow:hidden; padding:16px; text-align:left;">
+    <div id="seasonsModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); align-items:center; justify-content:center; z-index:10003;">
+        <div style="width:90%; max-width:700px; background:#0b0b0b; border:1px solid #222; border-radius:8px; overflow:hidden; padding:20px;">
             <h3 style="color:#e50914; margin-bottom:10px; text-transform:uppercase;">✦ SEZON SEÇİN ✦</h3>
             <div id="seasonsList" style="display:flex; flex-wrap:wrap; gap:8px; max-height:60vh; overflow:auto;"></div>
             <div style="margin-top:12px; text-align:right;"><button class="ep-btn" onclick="closeSeasonsModal()">Kapat</button></div>
@@ -772,44 +646,15 @@ HTML_TEMPLATE = """
     </div>
 
     <!-- Bölüm Seçim Modal (Sezon içi bölümler) -->
-    <div id="episodesModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:10004; text-align:center;">
-        <div style="width:75%; max-width:640px; margin:12vh auto 0 auto; background:#0b0b0b; border:1px solid #222; border-radius:8px; overflow:hidden; padding:16px; text-align:left;">
+    <div id="episodesModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); align-items:center; justify-content:center; z-index:10004;">
+        <div style="width:90%; max-width:700px; background:#0b0b0b; border:1px solid #222; border-radius:8px; overflow:hidden; padding:20px;">
             <h3 id="episodesTitle" style="color:#e50914; margin-bottom:10px; text-transform:uppercase;">✦ BÖLÜMLER ✦</h3>
             <div id="episodesList" style="display:flex; flex-direction:column; gap:8px; max-height:60vh; overflow:auto;"></div>
             <div style="margin-top:12px; text-align:right;"><button class="ep-btn" onclick="closeEpisodesModal()">Kapat</button></div>
         </div>
     </div>
 
-      <script>
-        // ----- TV UYUMLULUK EKLENTİLERİ -----
-        let currentModal = null;
-
-        function setFocusToFirstFocusable(modalElement) {
-            if (!modalElement) return;
-            const focusable = modalElement.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
-            if (focusable.length) {
-                focusable[0].focus();
-            } else {
-                modalElement.setAttribute('tabindex', '-1');
-                modalElement.focus();
-            }
-        }
-
-        function trapFocus(event) {
-            if (!currentModal) return;
-            const key = event.key;
-            if (key === 'Escape' || key === 'Back' || key === 'GoBack') {
-                event.preventDefault();
-                if (currentModal.id === 'infoModal') closeModal();
-                else if (currentModal.id === 'seasonsModal') closeSeasonsModal();
-                else if (currentModal.id === 'episodesModal') closeEpisodesModal();
-                else if (currentModal.id === 'searchModal') closeSearchModal();
-            }
-        }
-
-        document.addEventListener('keydown', trapFocus);
-        // ------------------------------------
-
+    <script>
         let currentId = "";
 
         // İLERLEME VE FAVORİ
@@ -856,14 +701,9 @@ HTML_TEMPLATE = """
             const btn = document.getElementById('modal-watch-btn');
             btn.dataset.id = id; btn.dataset.mode = mode; btn.dataset.url = url; btn.dataset.name = name;
             document.getElementById('infoModal').style.display = 'flex';
-            currentModal = document.getElementById('infoModal');
-            setFocusToFirstFocusable(currentModal);
         }
 
-        function closeModal() { 
-            document.getElementById('infoModal').style.display = 'none';
-            if (currentModal === document.getElementById('infoModal')) currentModal = null;
-        }
+        function closeModal() { document.getElementById('infoModal').style.display = 'none'; }
 
         async function watchFromModal() {
             const btn = document.getElementById('modal-watch-btn');
@@ -893,14 +733,9 @@ HTML_TEMPLATE = """
                 });
             }
             document.getElementById('seasonsModal').style.display = 'flex';
-            currentModal = document.getElementById('seasonsModal');
-            setFocusToFirstFocusable(currentModal);
         }
 
-        function closeSeasonsModal() { 
-            document.getElementById('seasonsModal').style.display = 'none';
-            if (currentModal === document.getElementById('seasonsModal')) currentModal = null;
-        }
+        function closeSeasonsModal() { document.getElementById('seasonsModal').style.display = 'none'; }
 
         function openEpisodesModal(season, seriesName, seriesId) {
             const list = document.getElementById('episodesList');
@@ -916,14 +751,9 @@ HTML_TEMPLATE = """
                 list.appendChild(b);
             });
             document.getElementById('episodesModal').style.display = 'flex';
-            currentModal = document.getElementById('episodesModal');
-            setFocusToFirstFocusable(currentModal);
         }
 
-        function closeEpisodesModal() { 
-            document.getElementById('episodesModal').style.display = 'none';
-            if (currentModal === document.getElementById('episodesModal')) currentModal = null;
-        }
+        function closeEpisodesModal() { document.getElementById('episodesModal').style.display = 'none'; }
 
         function filter() {
             let val = document.getElementById('searchInput').value.toLowerCase();
@@ -945,57 +775,6 @@ HTML_TEMPLATE = """
             }
         });
     </script>
-
-<script>
-(function(){
-  function getCurrentModal(){
-    try { return (typeof currentModal !== "undefined") ? currentModal : null; } catch(e){ return null; }
-  }
-
-  // If focus tries to escape modal (e.g., posters underneath), pull it back.
-  document.addEventListener("focusin", function(e){
-    var m = getCurrentModal();
-    if(!m) return;
-    if(!m.contains(e.target)){
-      e.stopPropagation();
-      // Focus first focusable inside modal
-      var focusable = m.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])');
-      if(focusable && focusable.length){ focusable[0].focus(); }
-      else { m.setAttribute("tabindex","-1"); m.focus(); }
-    }
-  }, true);
-
-  // Prevent arrow keys from moving focus to underlying grid while modal is open
-  document.addEventListener("keydown", function(e){
-    var m = getCurrentModal();
-    if(!m) return;
-
-    // If the key event originates inside the modal, block it from reaching underlying page/grid handlers,
-    // but DO NOT preventDefault so the TV browser's native spatial navigation can still move focus
-    // between buttons/list items inside the modal.
-    if(m.contains(e.target)){
-        var k = e.key;
-        if(k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight"){
-            e.stopPropagation();
-            return;
-        }
-    }
-
-    // If focus is outside while a modal is open, prevent navigation and pull focus back.
-    if(!m.contains(document.activeElement)){
-        var k2 = e.key;
-        if(k2 === "ArrowUp" || k2 === "ArrowDown" || k2 === "ArrowLeft" || k2 === "ArrowRight"){
-            e.preventDefault();
-            e.stopPropagation();
-            var focusable = m.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])');
-            if(focusable && focusable.length){ focusable[0].focus(); }
-            else { m.setAttribute("tabindex","-1"); m.focus(); }
-        }
-    }
-}, true);
-})();
-</script>
-
 </body>
 </html>
 """
@@ -1370,8 +1149,7 @@ PLAYER_TEMPLATE = """
             const isM3u8 = rawUrl.includes('.m3u8');
             if(isM3u8 && window.Hls && Hls.isSupported()){
                 hls = new Hls();
-                usingProxy = (playUrl && playUrl !== rawUrl);
-                hls.loadSource(playUrl || rawUrl);
+                hls.loadSource(rawUrl);
                 hls.attachMedia(video);
                 hls.on(Hls.Events.MANIFEST_PARSED, ()=>{
                     restoreProgress();
@@ -1384,8 +1162,8 @@ PLAYER_TEMPLATE = """
                     }
                 });
             }else{
-                video.src = (playUrl || rawUrl);
-                usingProxy = (playUrl && playUrl !== rawUrl);
+                usingProxy = isChrome;
+                video.src = usingProxy ? playUrl : rawUrl;
                 video.load();
                 video.addEventListener('loadedmetadata', ()=>{
                     restoreProgress();
@@ -1514,10 +1292,10 @@ PLAYER_TEMPLATE = """
             var c = video.error && video.error.code ? video.error.code : '';
             if((c === 4 || c === 2) && !triedRetry && !((rawUrl || '').toLowerCase().indexOf('.m3u8') !== -1)){
                 triedRetry = true;
-                usingProxy = true;
-                setStatus(usingProxy ? 'Proxy acilmadi, direct deneniyor...' : 'Direct acilmadi, proxy deneniyor...');
+                usingProxy = !usingProxy;
+                setStatus(usingProxy ? 'Direct acilmadi, proxy deneniyor...' : 'Proxy acilmadi, direct deneniyor...');
                 try{
-                    var base = usingProxy ? rawUrl : playUrl;
+                    var base = usingProxy ? playUrl : rawUrl;
                     var withBust = base + (base.indexOf('?') >= 0 ? '&' : '?') + '_r=' + Date.now();
                     video.src = withBust;
                     video.load();
@@ -1545,57 +1323,6 @@ PLAYER_TEMPLATE = """
         attachMedia();
         updatePlayLabel();
     </script>
-
-<script>
-(function(){
-  function getCurrentModal(){
-    try { return (typeof currentModal !== "undefined") ? currentModal : null; } catch(e){ return null; }
-  }
-
-  // If focus tries to escape modal (e.g., posters underneath), pull it back.
-  document.addEventListener("focusin", function(e){
-    var m = getCurrentModal();
-    if(!m) return;
-    if(!m.contains(e.target)){
-      e.stopPropagation();
-      // Focus first focusable inside modal
-      var focusable = m.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])');
-      if(focusable && focusable.length){ focusable[0].focus(); }
-      else { m.setAttribute("tabindex","-1"); m.focus(); }
-    }
-  }, true);
-
-  // Prevent arrow keys from moving focus to underlying grid while modal is open
-  document.addEventListener("keydown", function(e){
-    var m = getCurrentModal();
-    if(!m) return;
-
-    // If the key event originates inside the modal, block it from reaching underlying page/grid handlers,
-    // but DO NOT preventDefault so the TV browser's native spatial navigation can still move focus
-    // between buttons/list items inside the modal.
-    if(m.contains(e.target)){
-        var k = e.key;
-        if(k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight"){
-            e.stopPropagation();
-            return;
-        }
-    }
-
-    // If focus is outside while a modal is open, prevent navigation and pull focus back.
-    if(!m.contains(document.activeElement)){
-        var k2 = e.key;
-        if(k2 === "ArrowUp" || k2 === "ArrowDown" || k2 === "ArrowLeft" || k2 === "ArrowRight"){
-            e.preventDefault();
-            e.stopPropagation();
-            var focusable = m.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])');
-            if(focusable && focusable.length){ focusable[0].focus(); }
-            else { m.setAttribute("tabindex","-1"); m.focus(); }
-        }
-    }
-}, true);
-})();
-</script>
-
 </body>
 </html>
 """
@@ -1757,7 +1484,7 @@ def transcode_start():
     if not _is_allowed_media_url(target):
         return jsonify({'ok': False, 'error': 'URL engellendi'}), 403
     if not _is_ffmpeg_available():
-        return jsonify({'ok': False, 'error': 'ffmpeg kurulu degil'}), 200
+        return jsonify({'ok': False, 'error': 'ffmpeg kurulu degil'}), 503
 
     job_id, playlist = _start_transcode_job(target)
     # wait briefly for first playlist write
