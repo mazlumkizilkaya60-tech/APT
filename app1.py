@@ -1370,7 +1370,8 @@ PLAYER_TEMPLATE = """
             const isM3u8 = rawUrl.includes('.m3u8');
             if(isM3u8 && window.Hls && Hls.isSupported()){
                 hls = new Hls();
-                hls.loadSource(rawUrl);
+                usingProxy = (playUrl && playUrl !== rawUrl);
+                hls.loadSource(playUrl || rawUrl);
                 hls.attachMedia(video);
                 hls.on(Hls.Events.MANIFEST_PARSED, ()=>{
                     restoreProgress();
@@ -1383,8 +1384,8 @@ PLAYER_TEMPLATE = """
                     }
                 });
             }else{
-                usingProxy = isChrome;
-                video.src = usingProxy ? playUrl : rawUrl;
+                video.src = (playUrl || rawUrl);
+                usingProxy = (playUrl && playUrl !== rawUrl);
                 video.load();
                 video.addEventListener('loadedmetadata', ()=>{
                     restoreProgress();
