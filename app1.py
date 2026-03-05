@@ -1,7 +1,16 @@
 import requests
-from flask import Flask, render_template_string, request, jsonify
+import random
+import subprocess
+import tempfile
+import threading
+import hashlib
+import re
+import time
+from flask import Flask, render_template_string, request, jsonify, Response, stream_with_context, send_from_directory, abort, redirect
 
 app = Flask(__name__)
+import os
+from urllib.parse import quote, urlparse, urljoin
 
 # --- YENİ SUNUCU:---
 BASE_URL = "http://xbluex5k.xyz:8080"
